@@ -129,6 +129,11 @@ h1 {
   font-size: 14px;
 }
 
+.remember-row {
+  margin-top: 12px;
+  min-height: auto;
+}
+
 .controls {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

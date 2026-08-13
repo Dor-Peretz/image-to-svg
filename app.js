@@ -55,12 +55,17 @@ const els = {
   sizeHeight: document.getElementById("size-height"),
   sizeUnit: document.getElementById("size-unit"),
   sizerRatio: document.getElementById("sizer-ratio"),
+  remember: document.getElementById("remember"),
 };
 
 const originalCtx = els.original.getContext("2d", { willReadFrequently: true });
 const bwCtx = els.bw.getContext("2d", { willReadFrequently: true });
 
-let sourceName = "shape";
+let lastFile = null;
+const SETTINGS_KEY = "image-to-svg-settings";
+const DB_NAME = "image-to-svg";
+const DB_STORE = "files";
+const MAX_SAVED_BYTES = 25 * 1024 * 1024;
 let sourceBitmap = null;
 let lastSvg = "";
 let renderTimer = 0;
@@ -323,12 +328,132 @@ els.copyBtn.addEventListener("click", async () => {
   els.status.textContent = "SVG copied to the clipboard.";
 });
 
-async function loadFile(file) {
+els.remember.addEventListener("change", async () => {
+  persistSettings();
+  if (!els.remember.checked) {
+    await clearSavedImage();
+    return;
+  }
+  if (lastFile) await saveLastImage(lastFile);
+});
+
+const SETTING_FIELDS = [
+  ["threshold", "value"],
+  ["smooth", "value"],
+  ["simplify", "value"],
+  ["invert", "checked"],
+  ["alreadyBw", "checked"],
+  ["useImage", "checked"],
+  ["keepColors", "checked"],
+  ["outline", "checked"],
+  ["crop", "checked"],
+  ["fillColor", "value"],
+  ["strokeColor", "value"],
+  ["strokeWidth", "value"],
+  ["whiteBg", "checked"],
+  ["nozzle", "value"],
+  ["sizeWidth", "value"],
+  ["sizeHeight", "value"],
+  ["sizeUnit", "value"],
+  ["remember", "checked"],
+];
+
+function persistSettings() {
+  const settings = { lastSizeUnit, nextZoneId, zones };
+  for (const [key, prop] of SETTING_FIELDS) {
+    if (els[key]) settings[key] = els[key][prop];
+  }
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch (error) {
+    console.warn("Could not save settings", error);
+  }
+}
+
+function readSettings() {
+  try {
+    return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function applySettings(settings) {
+  if (!settings) return;
+  for (const [key, prop] of SETTING_FIELDS) {
+    if (!els[key] || settings[key] == null) continue;
+    els[key][prop] = settings[key];
+  }
+  if (settings.lastSizeUnit) lastSizeUnit = settings.lastSizeUnit;
+  if (Array.isArray(settings.zones)) zones = settings.zones;
+  if (settings.nextZoneId) nextZoneId = settings.nextZoneId;
+}
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveLastImage(file) {
+  if (!els.remember.checked || !file || file.size > MAX_SAVED_BYTES) return;
+  const db = await openDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, "readwrite");
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+    tx.objectStore(DB_STORE).put(
+      {
+        name: file.name,
+        type: file.type || "image/png",
+        blob: file.slice(0, file.size, file.type || "image/png"),
+      },
+      "last",
+    );
+  });
+}
+
+async function readLastImage() {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, "readonly");
+    const request = tx.objectStore(DB_STORE).get("last");
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function clearSavedImage() {
+  try {
+    const db = await openDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.objectStore(DB_STORE).delete("last");
+    });
+  } catch (error) {
+    console.warn("Could not clear saved image", error);
+  }
+}
+
+async function loadFile(file, options = {}) {
+  const restoring = Boolean(options.restore);
+  lastFile = file;
   sourceName = file.name.replace(/\.[^.]+$/, "") || "shape";
   try {
     sourceBitmap = await createImageBitmap(file);
-    zones = [];
-    selectedZoneId = null;
+    if (!restoring) {
+      zones = [];
+      selectedZoneId = null;
+      nextZoneId = 1;
+    }
     draftZone = null;
     setDrawing(false);
     fitImage();
@@ -340,7 +465,13 @@ async function loadFile(file) {
     els.status.hidden = false;
     renderZoneList();
     render();
-    syncSize("width");
+    if (restoring) {
+      els.status.textContent = `Restored ${file.name}`;
+    } else {
+      syncSize("width");
+      persistSettings();
+      saveLastImage(file).catch((error) => console.warn("Could not save image", error));
+    }
   } catch (error) {
     els.status.hidden = false;
     els.status.textContent = "Could not read that image. Try a PNG, JPG, or WebP.";
@@ -348,8 +479,33 @@ async function loadFile(file) {
   }
 }
 
+async function restoreSession() {
+  const settings = readSettings();
+  if (settings) applySettings(settings);
+  updateLabels();
+  updateModeUi();
+  if (!els.remember.checked) return;
+  try {
+    const record = await readLastImage();
+    if (!record?.blob) return;
+    const file = new File([record.blob], record.name || "image.png", {
+      type: record.type || "image/png",
+    });
+    await loadFile(file, { restore: true });
+    if (settings) applySettings(settings);
+    renderZoneList();
+    syncSize("width");
+    els.sizeHeight.value = settings?.sizeHeight || els.sizeHeight.value;
+    updateSizerRatio();
+    scheduleRender();
+  } catch (error) {
+    console.warn("Could not restore last image", error);
+  }
+}
+
 function scheduleRender() {
   updateLabels();
+  persistSettings();
   clearTimeout(renderTimer);
   renderTimer = setTimeout(render, 40);
 }
@@ -887,6 +1043,7 @@ function rebuildOutput() {
   updateLabels();
   updateModeUi();
   updateEditorButtons();
+  persistSettings();
 
   if (usingImage()) {
     if (!embedded) return;
@@ -1421,3 +1578,4 @@ function fmt(value, digits = 2) {
 
 updateLabels();
 updateModeUi();
+restoreSession();
