@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Image to SVG</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%231c1917' width='32' height='32' rx='6'/%3E%3Cpath fill='%23f4efe6' d='M8 22l5.2-12h2.1L21 22h-2.3l-1.1-2.7h-6.2L10.3 22H8zm4.4-4.6h4.7L14.7 12h-.1l-2.2 5.4z'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="header">
+        <div>
+          <p class="eyebrow">Raster → silhouette → vector</p>
+          <h1>Image to SVG</h1>
+          <p class="lede">
+            Drop in a photo or logo. The app converts it to black and white,
+            traces the shape, and exports a clean SVG you can scale forever.
+          </p>
+        </div>
+        <div class="header-actions">
+          <button id="copy-btn" class="btn ghost" type="button" disabled>Copy SVG</button>
+          <button id="download-btn" class="btn" type="button" disabled>Download SVG</button>
+        </div>
+      </header>
+
+      <section class="drop" id="drop-zone">
+        <input id="file-input" type="file" accept="image/*" hidden />
+        <div class="drop-copy">
+          <strong>Drop an image here</strong>
+          <span>or click to choose a PNG, JPG, or WebP</span>
+        </div>
+        <button id="choose-btn" class="btn ghost" type="button">Choose file</button>
+      </section>
+
+      <section class="controls" id="controls" hidden>
+        <label class="control trace-only">
+          <span>Threshold <em id="threshold-value">48%</em></span>
+          <input id="threshold" type="range" min="1" max="99" value="48" />
+        </label>
+        <label class="control trace-only crisp-ignore">
+          <span>Smooth <em id="smooth-value">2</em></span>
+          <input id="smooth" type="range" min="0" max="8" value="2" />
+        </label>
+        <label class="control trace-only crisp-ignore">
+          <span>Simplify <em id="simplify-value">1.8</em></span>
+          <input id="simplify" type="range" min="4" max="80" value="18" />
+        </label>
+        <label class="control">
+          <span>Zoom <em id="zoom-value">100%</em></span>
+          <input id="zoom" type="range" min="50" max="400" value="100" />
+        </label>
+        <label class="check">
+          <input id="invert" type="checkbox" />
+          <span>Invert (light areas become the shape)</span>
+        </label>
+        <label class="check">
+          <input id="already-bw" type="checkbox" />
+          <span>Already black &amp; white</span>
+        </label>
+        <label class="check">
+          <input id="use-image" type="checkbox" />
+          <span>Use original image (no outline)</span>
+        </label>
+        <label class="check">
+          <input id="keep-colors" type="checkbox" checked />
+          <span>Keep original colors</span>
+        </label>
+        <label class="check trace-only">
+          <input id="outline" type="checkbox" />
+          <span>Outline only</span>
+        </label>
+        <label class="check">
+          <input id="crop" type="checkbox" />
+          <span>Crop to shape</span>
+        </label>
+        <label class="control">
+          <span>Nozzle size</span>
+          <select id="nozzle">
+            <option value="0">Off</option>
+            <option value="0.2">0.2 mm</option>
+            <option value="0.4">0.4 mm</option>
+          </select>
+        </label>
+        <button id="fit-btn" class="btn ghost fit-btn" type="button">Fit whole image</button>
+      </section>
+
+      <section class="sizer" id="sizer" hidden>
+        <div class="sizer-copy">
+          <h2>Print size</h2>
+          <p>Type the width you want. Height is calculated from the image ratio so it will not stretch.</p>
+        </div>
+        <div class="sizer-row">
+          <label class="control">
+            <span>Width</span>
+            <input id="size-width" type="number" min="0.1" step="0.1" value="5" />
+          </label>
+          <span class="sizer-lock" aria-hidden="true">×</span>
+          <label class="control">
+            <span>Height <em>auto</em></span>
+            <input id="size-height" type="number" min="0.1" step="0.1" />
+          </label>
+          <label class="control">
+            <span>Units</span>
+            <select id="size-unit">
+              <option value="cm" selected>cm</option>
+              <option value="mm">mm</option>
+            </select>
+          </label>
+        </div>
+        <p class="sizer-ratio" id="sizer-ratio"></p>
+      </section>
+
+      <p class="status" id="status" hidden></p>
+
+      <section class="stages" id="stages" hidden>
+        <figure class="stage" id="original-stage">
+          <figcaption id="original-caption">Original · drag to move</figcaption>
+          <div class="viewport" id="original-view" data-sync="raster">
+            <canvas id="original-canvas"></canvas>
+            <div class="zone-hint" id="zone-hint" hidden>
+              <strong>Drag a box here</strong>
+              <span>This area will get its own threshold</span>
+            </div>
+          </div>
+        </figure>
+        <figure class="stage">
+          <figcaption>Black &amp; white · drag to move</figcaption>
+          <div class="viewport" id="bw-view" data-sync="raster">
+            <canvas id="bw-canvas"></canvas>
+          </div>
+        </figure>
+        <figure class="stage">
+          <figcaption>SVG · click a part</figcaption>
+          <div class="viewport svg-frame" id="svg-preview"></div>
+        </figure>
+      </section>
+
+      <section class="zones" id="zones-panel" hidden>
+        <div class="zones-head">
+          <div>
+            <h2>Add threshold zones</h2>
+            <ol class="zone-steps">
+              <li>Click <strong>Add zone</strong></li>
+              <li>Drag a box on the <strong>Original</strong> image</li>
+              <li>Adjust that zone’s threshold slider</li>
+            </ol>
+          </div>
+          <div class="zones-actions">
+            <button id="draw-zone-btn" class="btn" type="button">Add zone</button>
+            <button id="clear-zones-btn" class="btn ghost" type="button">Clear all</button>
+          </div>
+        </div>
+        <div class="zone-list" id="zone-list"></div>
+      </section>
+
+      <section class="editor" id="editor" hidden>
+        <div class="editor-head">
+          <div>
+            <h2>Edit SVG</h2>
+            <p id="editor-help">
+              Click a part to select it. Shift-click to select more. Delete leftover
+              blobs, then change fill, stroke, or outline.
+            </p>
+          </div>
+          <div class="editor-actions trace-edit">
+            <button id="keep-btn" class="btn ghost" type="button" disabled>Keep selected</button>
+            <button id="delete-btn" class="btn ghost" type="button" disabled>Delete selected</button>
+            <button id="restore-btn" class="btn ghost" type="button" disabled>Restore all parts</button>
+          </div>
+        </div>
+        <div class="editor-tools">
+          <label class="swatch recolor-only">
+            <span>Fill</span>
+            <input id="fill-color" type="color" value="#1c1917" />
+          </label>
+          <label class="swatch trace-edit">
+            <span>Stroke</span>
+            <input id="stroke-color" type="color" value="#1c1917" />
+          </label>
+          <label class="control trace-edit">
+            <span>Stroke width <em id="stroke-width-value">0.00</em></span>
+            <input id="stroke-width" type="range" min="0" max="40" value="0" />
+          </label>
+          <label class="check">
+            <input id="white-bg" type="checkbox" />
+            <span>White background</span>
+          </label>
+        </div>
+        <div class="editor-canvas svg-frame" id="editor-canvas"></div>
+      </section>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
