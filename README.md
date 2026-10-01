@@ -2,6 +2,8 @@
 
 A small local web app that turns a photo or logo into a black-and-white silhouette, traces that shape, and exports it as SVG.
 
+![Image to SVG demo — threshold, smooth, and simplify live in the UI](linkedin-assets/linkedin-logo-svg-print.gif)
+
 ## How to use
 
 Open `index.html` in a browser. Then:
